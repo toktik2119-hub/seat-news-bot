@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import requests
 import feedparser
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ BUSQUEDAS = [
 SEEN_FILE = "seen.json"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 TZ = ZoneInfo("Europe/Madrid")
+DESDE = datetime(2026, 10, 1, tzinfo=TZ)  # solo noticias desde esta fecha
 
 
 def fecha_noticia(e):
@@ -33,7 +35,7 @@ def cargar_vistos():
     if os.path.exists(SEEN_FILE):
         with open(SEEN_FILE, encoding="utf-8") as f:
             return set(json.load(f))
-    return None
+    return set()
 
 
 def guardar_vistos(vistos):
@@ -42,19 +44,22 @@ def guardar_vistos(vistos):
 
 
 def enviar(texto):
-    requests.post(
-        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        data={"chat_id": CHAT_ID, "text": texto},
-        timeout=30,
-    )
-
+    for _ in range(5):
+        r = requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            data={"chat_id": CHAT_ID, "text": texto},
+            timeout=30,
+        )
+        if r.status_code == 429:
+            espera = r.json().get("parameters", {}).get("retry_after", 5)
+            time.sleep(espera + 1)
+            continue
+        return
+    
 
 def main():
     vistos = cargar_vistos()
-    primera_vez = vistos is None
-    vistos = vistos or set()
     nuevas = []
-    hoy = datetime.now(TZ).date()
 
     for q in BUSQUEDAS:
         url = (
@@ -68,15 +73,18 @@ def main():
         for e in entradas:
             if e.link in vistos:
                 continue
-            f = fecha_noticia(e)
-            # Solo noticias de hoy; las antiguas se marcan como vistas sin enviarlas
             vistos.add(e.link)
-            if f and f.date() == hoy:
-                nuevas.append(f"📰 {e.title}\n🕒 {f.strftime('%H:%M')}\n{e.link}")
+            f = fecha_noticia(e)
+            if f and f >= DESDE:
+                nuevas.append((f, e.title, e.link))
 
-    if not primera_vez:
-        for n in nuevas:
-            enviar(n)
+    # Las más antiguas primero
+    nuevas.sort(key=lambda x: x[0])
+    print("Noticias a enviar:", len(nuevas))
+
+    for f, titulo, link in nuevas:
+        enviar(f"📰 {titulo}\n🕒 {f.strftime('%d/%m %H:%M')}\n{link}")
+        time.sleep(1)
 
     guardar_vistos(vistos)
 
