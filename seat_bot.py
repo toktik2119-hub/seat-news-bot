@@ -2,6 +2,8 @@ import os
 import json
 import requests
 import feedparser
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -17,6 +19,14 @@ BUSQUEDAS = [
 
 SEEN_FILE = "seen.json"
 HEADERS = {"User-Agent": "Mozilla/5.0"}
+TZ = ZoneInfo("Europe/Madrid")
+
+
+def fecha_noticia(e):
+    p = e.get("published_parsed")
+    if not p:
+        return None
+    return datetime(*p[:6], tzinfo=timezone.utc).astimezone(TZ)
 
 
 def cargar_vistos():
@@ -44,6 +54,7 @@ def main():
     primera_vez = vistos is None
     vistos = vistos or set()
     nuevas = []
+    hoy = datetime.now(TZ).date()
 
     for q in BUSQUEDAS:
         url = (
@@ -55,9 +66,13 @@ def main():
         entradas = feedparser.parse(r.content).entries
         print(q, "-> status", r.status_code, "-> noticias", len(entradas))
         for e in entradas:
-            if e.link not in vistos:
-                vistos.add(e.link)
-                nuevas.append(f"📰 {e.title}\n{e.link}")
+            if e.link in vistos:
+                continue
+            f = fecha_noticia(e)
+            # Solo noticias de hoy; las antiguas se marcan como vistas sin enviarlas
+            vistos.add(e.link)
+            if f and f.date() == hoy:
+                nuevas.append(f"📰 {e.title}\n🕒 {f.strftime('%H:%M')}\n{e.link}")
 
     if not primera_vez:
         for n in nuevas:
